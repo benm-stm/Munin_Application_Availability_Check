@@ -1,0 +1,151 @@
+#!/usr/bin/perl
+# -*- perl -*-
+
+=head1 NAME
+
+users - Munin plugin to monitor tuleap availability.
+
+=head1 APPLICABLE SYSTEMS
+
+Should work on any Unix that has the included perl modules.
+
+=head1 CONFIGURATION
+
+None needed
+
+=head1 INTERPRETATION
+
+The plugin simply runs a rest api call to verify the availability of tuleap
+
+=head1 BUGS
+
+In the case where an other compartiment of the application is down
+tuleap will marked down (this is a feature, not a bug).
+
+=head1 MAGIC MARKERS
+
+  #%# family=auto
+  #%# capabilities=autoconf
+
+=head1 VERSION
+
+  $Id$
+
+=head1 AUTHOR
+
+Created in: 07/01/2016
+Version No: V1.0
+Author: BEN MANSOUR Mohamed Rafik
+
+=head1 LICENSE
+
+GPLv2
+
+=cut
+
+use Munin::Plugin;
+use strict;
+use warnings;
+use LWP::Simple;
+use JSON qw( decode_json );
+
+sub rest_call{
+        my ($user, $password, $uri) = @_;
+        my $req = '';
+        #-- bypass ssl check
+        #$ENV{'PERL_LWP_SSL_VERIFY_HOSTNAME'} = 0;
+        #$ENV{HTTPS_DEBUG} = 1;
+
+        #-- construct the request and send it
+        if ($user ne '' && $password ne '') {
+                $req = HTTP::Request->new( 'POST', $uri );
+                my $json = "{\"username\":\"$user\",\"password\":\"$password\"}";
+                $req->content( $json );
+                $req->header( 'Content-Type' => 'application/json' );
+        } else {
+                $req = HTTP::Request->new( 'GET', $uri );
+        }
+        my $lwp = LWP::UserAgent->new;
+        my $response = $lwp->request($req);
+        die "Error getting $uri" unless defined $response;
+        return $response;
+}
+
+sub json_parse{
+        my ($json, $wanted_field) = @_;
+        eval {
+                decode_json($json);
+                my $decoded_json = decode_json($json);
+                return $decoded_json->{"$wanted_field"};
+                1;
+        }
+}
+
+sub http_response{
+        my ($response) = @_;
+        if ($response->is_success) {
+                return 0;
+        } else {
+                return 1;
+        }
+}
+
+#-- Main
+#-- authentication parameters
+my $user = "munin-qa";
+my $password_tuleap = "Hydoz1!:z#";
+
+#-- json wanted field for parsing
+my $wanted_field = "user_id";
+#-- tuleap server
+my $serv_tuleap = "https://qa.forge-smd.st.com";
+my $rest_url = "/api/tokens";
+
+if ( defined($ARGV[0])) {
+    if ($ARGV[0] eq 'autoconf') {
+        print "yes\n";
+        exit 0;
+    }
+
+    if ( $ARGV[0] eq "config" ) {
+        print "graph_title Availability\n";
+        print "graph_vlabel Availability\n";
+        print "graph_category Tuleap\n";
+        print "graph_args --upper-limit 1 -l 0\n";
+        print "graph_scale no\n";
+
+        print "Rest.label Rest Availability\n";
+        print "Rest.type GAUGE\n";
+        print "Rest.min 0\n";
+        print "Rest.max 1\n";
+        print "Rest.info Tuleap's API rest authentication response 0 if ok 1 if not.\n";
+        print "Rest.warning 0\n";
+        print "Rest.draw LINE1\n";
+
+        print "Apache.label Apache Availability\n";
+        print "Apache.type GAUGE\n";
+        print "Apache.min 0\n";
+        print "Apache.max 1\n";
+        print "Apache.info Tuleap's apache server availability 0 if ok 1 if not.\n";
+        print "Apache.draw LINE1\n";
+        print "Apache.critical 0\n";
+
+        foreach my $field (qw(Rest Apache other)) {
+                print_thresholds($field);
+        }
+        exit 0;
+    }
+}
+my $rest = 1;
+my $apache = 1;
+my $response = rest_call($user, $password_tuleap, $serv_tuleap.$rest_url);
+my $json = $response->decoded_content;
+my $field = json_parse($json, $wanted_field);
+if ($field) {
+        $rest = 0;
+}
+$response = rest_call('', '', $serv_tuleap);
+$apache = http_response($response);
+
+print "Apache.value $apache\n";
+print "Rest.value $rest\n";
